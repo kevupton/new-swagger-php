@@ -16,7 +16,6 @@ use Swagger\Annotations\Schema;
 use Swagger\Annotations\Swagger;
 use Swagger\Annotations\Definition;
 use Swagger\Analysis;
-use Traversable;
 
 /**
  * Copy the annotated properties from parent classes;
@@ -45,10 +44,20 @@ class HandleReferences
         $this->importReferences();
     }
 
-    private function link($response) {
+    /**
+     * Creates the Linked list array item.
+     *
+     * @param $response
+     * @return array
+     */
+    private function link($response)
+    {
         return [null, $response, []];
     }
 
+    /**
+     * Maps the response to each parent child.
+     */
     private function mapResponses()
     {
         foreach ($this->responses as &$data) {
@@ -65,22 +74,41 @@ class HandleReferences
         }
     }
 
-    private function loadParent(&$data, $type, $name) {
-        if (isset($this->$type) && isset($this->{$type}[$name])) {
-            $data[0] = &$this->{$type}[$name];
-            $this->{$type}[$name][2][] = &$data;
+    /**
+     * Links the child with the parent
+     *
+     * @param $child
+     * @param $type
+     * @param $parent_name
+     */
+    private function loadParent(&$child, $type, $parent_name)
+    {
+        if (isset($this->$type) && isset($this->{$type}[$parent_name])) {
+            //link the parent
+            $child[0] = &$this->{$type}[$parent_name];
+            //add to list of children
+            $this->{$type}[$parent_name][2][] = &$child;
         }
     }
 
+    /**
+     * Imports the references from all of the responses
+     */
     private function importReferences()
     {
         $queue = $this->head_responses;
 
+        //while has items in the queue
         while (count($queue)) {
             $this->iterateQueue($queue);
         }
     }
 
+    /**
+     * Iterates the pending queue, popping the first element of the list.
+     *
+     * @param array $queue
+     */
     private function iterateQueue(&$queue)
     {
         $item = array_pop($queue);
@@ -90,16 +118,20 @@ class HandleReferences
         /** @var Response $response */
         $response = $item[1];
         /** @var Response $parent_response */
-        $parent_response = $item[0];
+        $parent = $item[0];
 
-        if (!is_null($parent_response)) {
+        //Reset the ref
+        $response->ref = null;
+
+        if (!is_null($parent)) {
+            $parent_response = $parent[1];
             foreach ($parent_response as $key => $value) {
                 if ($key == "schema") {
-                    $this->importSchema($parent_response->schema, $response->schema);
+                    $this->importSchema($value, $response->schema);
                 } else if ($key != "response") {
                     if (is_array($value)) {
                         $response->$key = array_merge($response->$key, $parent_response->$key);
-                    } else {
+                    } else if (!isset($response->$key)) {
                         $response->$key = $parent_response->$key;
                     }
                 }
@@ -107,20 +139,64 @@ class HandleReferences
         }
     }
 
+    /**
+     * Imports the schema
+     *
+     * @param Schema $parent
+     * @param Schema $child
+     */
     private function importSchema(Schema $parent, Schema $child)
     {
+
+        $temp = [];
+
+        //add all in a temporary array
+        foreach ($child->properties as $key => $value) {
+            $temp[$value->property] = $value;
+        }
+
+        //reset the properties
+        $child->properties = [];
+
         foreach ($parent as $key => $value) {
             if ($key == "properties") {
-
+                /** @var Property[] $value */
+                foreach ($value as $property) {
+                    if ($this->isEmpty($property) && isset($temp[$property->property])) { //if it has the same field
+                        $child->properties[] = $temp[$property->property];
+                        unset($temp[$property->property]);
+                    } else {
+                        $child->properties[] = $property;
+                    }
+                }
             } else {
-
+                $child->$key = $parent->$key;
             }
+        }
+
+        //now we need to just add the ones in the temp array back in.
+        foreach ($temp as $name => $temp_item) {
+            $found = false;
+            foreach ($child->properties as $property) {
+                if ($property->property != $name) {
+                    $found = true;
+                }
+            }
+            //if it doesn't already exist then add it
+            if (!$found) $child->properties[] = $temp_item;
         }
     }
 
-
-    private function handle(Response $response)
+    /**
+     * Checks if the value is empty.
+     *
+     * @param Property $property
+     * @return bool
+     */
+    private function isEmpty(Property $property)
     {
-
+        return !isset($property->type)
+            && !isset($property->description)
+            && $property->default == \SWAGGER\UNDEFINED;
     }
 }
